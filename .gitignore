@@ -1,0 +1,5 @@
+node_modules/
+dist/
+server/audio-cache/
+*.js.map
+.env
