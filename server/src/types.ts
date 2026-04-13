@@ -28,6 +28,7 @@ export interface NowPlaying {
 export interface Room {
   code: string;
   hostSocketId: string;
+  hostToken: string;
   // insertion-ordered map: socketId → Participant
   participants: Map<string, Participant>;
   queue: QueueItem[];

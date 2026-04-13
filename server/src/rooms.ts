@@ -48,6 +48,7 @@ class RoomStore {
     const room: Room = {
       code,
       hostSocketId,
+      hostToken: nanoid(32),
       participants: new Map([[hostSocketId, host]]),
       queue: [],
       nowPlaying: null,
