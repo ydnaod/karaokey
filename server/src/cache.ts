@@ -21,7 +21,7 @@ class AudioCache {
     if (!existsSync(CACHE_DIR)) return;
     const files = await readdir(CACHE_DIR).catch(() => [] as string[]);
     for (const file of files) {
-      const match = file.match(/^([a-zA-Z0-9_-]{11})\.webm$/);
+      const match = file.match(/^([a-zA-Z0-9_-]{11})\.mp4$/);
       if (!match) continue;
       const videoId = match[1];
       const filePath = path.join(CACHE_DIR, file);
@@ -64,15 +64,31 @@ class AudioCache {
     return total;
   }
 
-  private async evictIfNeeded(): Promise<void> {
-    while (this.totalSize() > MAX_SIZE_BYTES && this.entries.size > 0) {
+  // Evict LRU entries until total size is below targetBytes.
+  private async evictUntilBelow(targetBytes: number): Promise<void> {
+    while (this.totalSize() > targetBytes && this.entries.size > 0) {
       const oldest = Array.from(this.entries.values()).sort(
         (a, b) => a.lastAccessedAt - b.lastAccessedAt
       )[0];
-      await unlink(oldest.filePath).catch(() => {});
+      try {
+        await unlink(oldest.filePath);
+        console.log(`[cache] Evicted ${oldest.videoId} (freed ${(oldest.sizeBytes / 1e6).toFixed(0)} MB)`);
+      } catch (err) {
+        console.warn(`[cache] Could not delete ${oldest.filePath}:`, err);
+      }
+      // Always remove from entries so we don't loop forever on a bad file
       this.entries.delete(oldest.videoId);
-      console.log(`[cache] Evicted ${oldest.videoId}`);
     }
+  }
+
+  // Call before starting a download to ensure there is room.
+  async makeRoom(): Promise<void> {
+    // Keep to 75% so there's headroom for incoming downloads
+    await this.evictUntilBelow(MAX_SIZE_BYTES * 0.75);
+  }
+
+  private async evictIfNeeded(): Promise<void> {
+    await this.evictUntilBelow(MAX_SIZE_BYTES);
   }
 
   count(): number {

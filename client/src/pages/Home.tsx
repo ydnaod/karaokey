@@ -1,5 +1,5 @@
 import { useState, FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { socket } from '../socket'
 import { useRoomContext } from '../context/RoomContext'
 
@@ -7,10 +7,13 @@ type Mode = 'idle' | 'create' | 'join'
 
 export default function Home() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { joinRoom } = useRoomContext()
-  const [mode, setMode] = useState<Mode>('idle')
-  const [displayName, setDisplayName] = useState('')
-  const [roomCode, setRoomCode] = useState('')
+  const [mode, setMode] = useState<Mode>(() =>
+    searchParams.get('room') ? 'join' : 'idle'
+  )
+  const [displayName, setDisplayName] = useState(() => localStorage.getItem('karaokey:name') ?? '')
+  const [roomCode, setRoomCode] = useState(() => searchParams.get('room') ?? '')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -33,7 +36,9 @@ export default function Home() {
 
       socket.emit('room:create', { displayName: name })
 
-      socket.once('room:created', ({ roomCode: code }: { roomCode: string }) => {
+      socket.once('room:created', ({ roomCode: code, hostToken }: { roomCode: string; hostToken: string }) => {
+        localStorage.setItem('karaokey:name', name)
+        localStorage.setItem(`karaokey:host:${code}`, hostToken)
         navigate(`/room/${code}`)
       })
 
@@ -47,16 +52,10 @@ export default function Home() {
     }
   }
 
-  async function handleJoin(e: FormEvent) {
-    e.preventDefault()
-    const name = displayName.trim()
-    const code = roomCode.trim().toUpperCase()
-    if (!name) { setError('Enter your name'); return }
-    if (code.length !== 4) { setError('Enter a 4-letter room code'); return }
+  async function doJoin(name: string, code: string) {
     setError('')
     setLoading(true)
 
-    // Verify room exists first
     try {
       const res = await fetch(`/api/rooms/${code}`)
       const data = await res.json() as { exists: boolean }
@@ -71,7 +70,9 @@ export default function Home() {
       return
     }
 
-    joinRoom(code, name)
+    localStorage.setItem('karaokey:name', name)
+    const storedToken = localStorage.getItem(`karaokey:host:${code}`) ?? undefined
+    joinRoom(code, name, storedToken)
 
     socket.once('room:joined', () => {
       navigate(`/room/${code}`)
@@ -83,8 +84,17 @@ export default function Home() {
     })
   }
 
+  async function handleJoin(e: FormEvent) {
+    e.preventDefault()
+    const name = displayName.trim()
+    const code = roomCode.trim().toUpperCase()
+    if (!name) { setError('Enter your name'); return }
+    if (code.length !== 4) { setError('Enter a 4-letter room code'); return }
+    await doJoin(name, code)
+  }
+
   return (
-    <div className="min-h-full bg-gray-950 text-white flex flex-col items-center justify-center p-4">
+    <div className="h-full bg-gray-950 text-white flex flex-col items-center justify-center p-4 overflow-y-auto overscroll-none">
       <h1 className="text-5xl font-bold tracking-tight mb-2">
         karao<span className="text-pink-500">key</span>
       </h1>
@@ -116,7 +126,7 @@ export default function Home() {
             value={displayName}
             onChange={(e) => setDisplayName(e.target.value)}
             maxLength={32}
-            className="px-4 py-3 rounded-lg bg-gray-800 border border-gray-700 focus:outline-none focus:border-pink-500"
+            className="px-4 py-3 rounded-lg bg-gray-800 border border-gray-700 focus:outline-none focus:border-pink-500 text-base"
             autoFocus
           />
           {error && <p className="text-red-400 text-sm">{error}</p>}
@@ -148,7 +158,7 @@ export default function Home() {
             value={displayName}
             onChange={(e) => setDisplayName(e.target.value)}
             maxLength={32}
-            className="px-4 py-3 rounded-lg bg-gray-800 border border-gray-700 focus:outline-none focus:border-pink-500"
+            className="px-4 py-3 rounded-lg bg-gray-800 border border-gray-700 focus:outline-none focus:border-pink-500 text-base"
             autoFocus
           />
           <input
@@ -178,6 +188,7 @@ export default function Home() {
           </div>
         </form>
       )}
+
     </div>
   )
 }

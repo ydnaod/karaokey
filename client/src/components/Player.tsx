@@ -18,6 +18,7 @@ export default function Player({ audio, videoRef, nowPlaying, queue, pitchSemito
   nowPlayingRef.current = nowPlaying
   const queueRef = useRef(queue)
   queueRef.current = queue
+  const waitingForNext = useRef(false)
 
   function computeOffset(np: NowPlaying): number {
     if (np.paused && np.pausedAt !== null) {
@@ -36,8 +37,9 @@ export default function Player({ audio, videoRef, nowPlaying, queue, pitchSemito
     await audio.play(offset)
   }, [audio])
 
-  // Song change
+  // Song change — reset waiting flag so it doesn't carry over to a new song
   useEffect(() => {
+    waitingForNext.current = false
     if (!nowPlaying.paused) {
       startPlayback(nowPlaying)
     } else {
@@ -70,30 +72,54 @@ export default function Player({ audio, videoRef, nowPlaying, queue, pitchSemito
       const next = q[idx + 1]
       if (next?.audioReady) {
         socket.emit('player:next')
+      } else {
+        waitingForNext.current = true
       }
     }
     video.addEventListener('ended', handleEnded)
     return () => video.removeEventListener('ended', handleEnded)
   }, [videoRef])
 
-  // Pause/resume from socket
+  // Auto-advance when we were waiting for a song to become ready
+  useEffect(() => {
+    if (!waitingForNext.current) return
+    const idx = queue.findIndex((item) => item.id === nowPlaying.queueItemId)
+    const next = queue[idx + 1]
+    if (next?.audioReady) {
+      waitingForNext.current = false
+      socket.emit('player:next')
+    }
+  }, [queue, nowPlaying.queueItemId])
+
+  // Pause/resume/restart from socket
   useEffect(() => {
     const onPaused = () => { audio.pause() }
     const onResumed = ({ nowPlaying: np }: { nowPlaying: NowPlaying }) => {
       audio.setPitch(np.pitchSemitones)
       audio.play(computeOffset(np))
     }
+    const onStarted = ({ nowPlaying: np }: { nowPlaying: NowPlaying }) => {
+      // Same song restarted — seek to beginning immediately.
+      // A different song starting is handled by the song-change effect below.
+      if (np.queueItemId === nowPlayingRef.current.queueItemId) {
+        audio.setPitch(np.pitchSemitones)
+        audio.play(0)
+      }
+    }
     socket.on('player:paused', onPaused)
     socket.on('player:resumed', onResumed)
+    socket.on('player:started', onStarted)
     return () => {
       socket.off('player:paused', onPaused)
       socket.off('player:resumed', onResumed)
+      socket.off('player:started', onStarted)
     }
   }, [audio])
 
   function handlePause() { socket.emit('player:pause') }
   function handleResume() { socket.emit('player:resume') }
   function handleNext() { socket.emit('player:next') }
+  function handleRestart() { socket.emit('player:restart') }
 
   function handleOpenDisplay() {
     window.open(`${window.location.origin}/display/${roomCode}`, '_blank', 'noopener')
@@ -133,6 +159,13 @@ export default function Player({ audio, videoRef, nowPlaying, queue, pitchSemito
           aria-label="Pause"
         >
           ⏸
+        </button>
+        <button
+          onClick={handleRestart}
+          className="w-10 h-10 rounded-full bg-gray-700 hover:bg-gray-600 flex items-center justify-center text-xl transition-colors"
+          aria-label="Restart song"
+        >
+          ⏮
         </button>
         <button
           onClick={handleNext}

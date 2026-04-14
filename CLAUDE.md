@@ -38,7 +38,7 @@ npm workspaces monorepo with two packages:
 
 YouTube iframes block Web Audio API access via CORS. Pitch shifting is impossible if you route through the YT iframe. The solution:
 
-1. **Server extracts audio** with `yt-dlp` when a song is queued → saves as `server/audio-cache/<videoId>.webm` (opus)
+1. **Server extracts video+audio** with `yt-dlp` when a song is queued → saves as `audio-cache/<videoId>.mp4`
 2. **Host client fetches** the raw audio file and decodes it via `AudioContext.decodeAudioData()`
 3. **SoundTouchJS AudioWorklet** (`@soundtouchjs/audio-worklet`) does real-time phase vocoder pitch shifting in the browser — no speed change, just pitch
 4. **Muted YouTube iframe** is shown for visuals alongside the extracted audio, kept in sync via offset timestamps + drift correction
@@ -83,8 +83,16 @@ npm run dev          # starts both server (:3001) and client (:5173)
 
 **Server → Client:** `room:created`, `room:joined`, `room:error`, `room:participants`, `role:changed`, `queue:updated`, `audio:ready`, `player:started`, `player:paused`, `player:resumed`, `pitch:changed`
 
+## Video cache format
+
+Downloaded files are stored as **MP4** (`audio-cache/<videoId>.mp4`), not WebM.
+
+**Do not change this to WebM/webm merge output.** YouTube serves different video codecs per video — some are VP9 (webm-compatible) but many are h264 (mp4 only). ffmpeg can merge any codec combination into MP4 without transcoding, but cannot stream-copy h264 into a WebM container. Switching to `--merge-output-format webm` will cause random failures for videos that only have h264 formats available.
+
+The yt-dlp format selector is `bestvideo[height<=720]+bestaudio/best[height<=720]` — codec-agnostic, relies on MP4 container to accept whatever YouTube serves.
+
 ## Caveats
 
 - `yt-dlp` must be installed on the server — it's a system binary, not an npm package
-- `server/audio-cache/` is gitignored; created automatically on server start
+- `audio-cache/` is gitignored; created automatically on server start
 - YouTube ToS gray area — intended for personal/private use only

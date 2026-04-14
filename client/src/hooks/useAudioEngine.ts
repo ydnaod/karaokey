@@ -43,29 +43,26 @@ export function useAudioEngine(videoRef: RefObject<HTMLVideoElement>): AudioEngi
   // Wire video element → SoundTouchNode → destination.
   // Called lazily when the video element is available (after Player mounts).
   const setup = useCallback(async () => {
-    if (setupDoneRef.current || !videoRef.current) {
-      console.log('[AudioEngine] setup skipped — done:', setupDoneRef.current, 'videoRef:', !!videoRef.current);
-      return;
-    }
+    if (setupDoneRef.current || !videoRef.current) return;
     setupDoneRef.current = true;
-    console.log('[AudioEngine] setup start');
 
     try {
       const ctx = ensureContext();
-      console.log('[AudioEngine] ctx state:', ctx.state);
       if (ctx.state === 'suspended') await ctx.resume();
 
       await SoundTouchNode.register(ctx, processorUrl as string);
-      console.log('[AudioEngine] SoundTouchNode registered');
 
       const stNode = new SoundTouchNode(ctx);
       stNode.pitchSemitones!.value = pitchRef.current;
-      stNodeRef.current = stNode;
 
+      // Wire the graph BEFORE storing the node reference, so setPitch()
+      // only ever operates on a fully-connected node.
       const mediaSource = ctx.createMediaElementSource(videoRef.current);
       mediaSource.connect(stNode);
       stNode.connect(ctx.destination);
-      console.log('[AudioEngine] audio graph wired');
+
+      stNodeRef.current = stNode;
+      console.log('[AudioEngine] setup complete — audio graph wired, ctx state:', ctxRef.current?.state);
     } catch (err) {
       console.error('[AudioEngine] setup failed:', err);
       setupDoneRef.current = false;
@@ -73,44 +70,35 @@ export function useAudioEngine(videoRef: RefObject<HTMLVideoElement>): AudioEngi
   }, [videoRef, ensureContext]);
 
   const load = useCallback(async (videoId: string) => {
-    console.log('[AudioEngine] load', videoId);
     await setup();
     if (!videoRef.current) return;
-    videoRef.current.src = `/video/${videoId}.webm`;
+    videoRef.current.src = `/video/${videoId}.mp4`;
     videoRef.current.load();
     loadedVideoIds.current.add(videoId);
-    console.log('[AudioEngine] load done, src set');
   }, [setup, videoRef]);
 
   const play = useCallback(async (offsetSeconds: number) => {
+    await setup();
     const video = videoRef.current;
     const ctx = ctxRef.current;
-    console.log('[AudioEngine] play called, offset:', offsetSeconds, 'ctx:', ctx?.state, 'readyState:', video?.readyState);
-    if (!video || !ctx) {
-      console.warn('[AudioEngine] play aborted — video:', !!video, 'ctx:', !!ctx);
-      return;
-    }
+    if (!video || !ctx) return;
 
     // Must resume before playing or audio will be silent
     if (ctx.state === 'suspended') await ctx.resume();
 
     // Wait for enough data before seeking + playing
     if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
-      console.log('[AudioEngine] waiting for canplay, readyState:', video.readyState);
       await new Promise<void>((resolve, reject) => {
         const onReady = () => { video.removeEventListener('canplay', onReady); video.removeEventListener('error', onError); resolve(); };
         const onError = () => { video.removeEventListener('canplay', onReady); video.removeEventListener('error', onError); reject(new Error('video error')); };
         video.addEventListener('canplay', onReady);
         video.addEventListener('error', onError);
       });
-      console.log('[AudioEngine] canplay fired');
     }
 
     video.currentTime = Math.max(0, offsetSeconds);
-    console.log('[AudioEngine] calling video.play()');
     await video.play().catch((err) => console.error('[AudioEngine] video.play() failed:', err));
-    console.log('[AudioEngine] video.play() resolved');
-  }, [videoRef]);
+  }, [setup, videoRef]);
 
   const pause = useCallback(() => {
     videoRef.current?.pause();
@@ -126,6 +114,9 @@ export function useAudioEngine(videoRef: RefObject<HTMLVideoElement>): AudioEngi
     pitchRef.current = semitones;
     if (stNodeRef.current) {
       stNodeRef.current.pitchSemitones!.value = semitones;
+      console.log('[pitch] applied semitones:', semitones, '| param value:', stNodeRef.current.pitchSemitones?.value);
+    } else {
+      console.warn('[pitch] stNode not ready — deferred to setup');
     }
   }, []);
 

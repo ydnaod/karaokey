@@ -1,11 +1,27 @@
 import { Hono } from 'hono';
 import { serveStatic } from '@hono/node-server/serve-static';
+import os from 'os';
 import { roomStore } from './rooms.js';
 import { audioCache, CACHE_DIR } from './cache.js';
-import { extractVideoId } from './ytdlp.js';
+import { extractVideoId, searchYouTube } from './ytdlp.js';
+
+function getLocalIP(): string | null {
+  for (const ifaces of Object.values(os.networkInterfaces())) {
+    for (const iface of ifaces ?? []) {
+      if (iface.family === 'IPv4' && !iface.internal) return iface.address;
+    }
+  }
+  return null;
+}
 
 export function buildHonoApp() {
   const app = new Hono();
+
+  // Network info (for QR code)
+  app.get('/api/info', (c) => {
+    const ip = getLocalIP();
+    return c.json({ ip, clientUrl: ip ? `http://${ip}:5173` : null });
+  });
 
   // Health
   app.get('/health', (c) =>
@@ -28,6 +44,19 @@ export function buildHonoApp() {
       return c.json({ title: data.title, thumbnailUrl: data.thumbnail_url, videoId });
     } catch {
       return c.json({ error: 'oEmbed fetch error' }, 502);
+    }
+  });
+
+  // YouTube search proxy
+  app.get('/api/search', async (c) => {
+    const q = c.req.query('q')?.trim();
+    if (!q) return c.json({ error: 'Missing q' }, 400);
+    try {
+      const results = await searchYouTube(q);
+      return c.json({ results });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Search failed';
+      return c.json({ error: msg }, 502);
     }
   });
 

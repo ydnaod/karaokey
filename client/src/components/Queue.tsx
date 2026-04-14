@@ -77,8 +77,11 @@ function SortableItem({ item, index, isPlaying, isHost, onPlay, onRemove }: Item
         <p className="text-xs text-gray-400 truncate">added by {item.addedBy}</p>
       </div>
 
-      {!item.audioReady && (
+      {!item.audioReady && !item.audioFailed && (
         <span className="text-xs text-yellow-500 flex-shrink-0 animate-pulse">loading…</span>
+      )}
+      {item.audioFailed && (
+        <span className="text-xs text-red-400 flex-shrink-0">failed</span>
       )}
 
       {isHost && item.audioReady && !isPlaying && (

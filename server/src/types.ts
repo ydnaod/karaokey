@@ -14,6 +14,7 @@ export interface QueueItem {
   thumbnailUrl: string;
   addedBy: string;
   audioReady: boolean;
+  audioFailed?: boolean;
 }
 
 export interface NowPlaying {

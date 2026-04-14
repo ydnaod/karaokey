@@ -64,7 +64,7 @@ class RoomStore {
     return this.rooms.get(code.toUpperCase());
   }
 
-  join(code: string, socketId: string, displayName: string): { room: Room; participant: Participant } {
+  join(code: string, socketId: string, displayName: string, hostToken?: string): { room: Room; participant: Participant; demotedSocketId: string | null } {
     const room = this.rooms.get(code.toUpperCase());
     if (!room) throw new Error('ROOM_NOT_FOUND');
 
@@ -74,14 +74,28 @@ class RoomStore {
       room.expiryTimeout = null;
     }
 
+    const isReclaiming = !!hostToken && hostToken === room.hostToken && room.hostSocketId !== socketId;
+    let demotedSocketId: string | null = null;
+
+    if (isReclaiming) {
+      // Demote current host to participant
+      const currentHost = room.participants.get(room.hostSocketId);
+      if (currentHost) {
+        currentHost.role = 'participant';
+        demotedSocketId = room.hostSocketId;
+      }
+      room.hostSocketId = socketId;
+    }
+
+    const role = isReclaiming ? 'host' : (room.participants.size === 0 ? 'host' : 'participant');
     const participant: Participant = {
       socketId,
       displayName,
-      role: 'participant',
+      role,
       joinedAt: Date.now(),
     };
     room.participants.set(socketId, participant);
-    return { room, participant };
+    return { room, participant, demotedSocketId };
   }
 
   leave(code: string, socketId: string): { room: Room; wasHost: boolean; promotedSocketId: string | null } {
@@ -144,10 +158,18 @@ class RoomStore {
       for (const item of room.queue) {
         if (item.videoId === videoId) {
           item.audioReady = true;
+          item.audioFailed = false;
         }
       }
-      if (room.nowPlaying?.videoId === videoId) {
-        // Already playing — nothing to do, just mark
+    }
+  }
+
+  markAudioFailed(videoId: string): void {
+    for (const room of this.rooms.values()) {
+      for (const item of room.queue) {
+        if (item.videoId === videoId) {
+          item.audioFailed = true;
+        }
       }
     }
   }

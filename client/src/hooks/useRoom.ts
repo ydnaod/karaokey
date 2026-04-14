@@ -98,9 +98,14 @@ export function useRoom() {
     };
   }, []);
 
-  const joinRoom = useCallback((roomCode: string, displayName: string) => {
-    if (!socket.connected) socket.connect();
-    socket.emit('room:join', { roomCode, displayName });
+  const joinRoom = useCallback((roomCode: string, displayName: string, hostToken?: string) => {
+    const emit = () => socket.emit('room:join', { roomCode, displayName, hostToken });
+    if (socket.connected) {
+      emit();
+    } else {
+      socket.once('connect', emit);
+      socket.connect();
+    }
   }, []);
 
   const leaveRoom = useCallback(() => {

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import { io } from 'socket.io-client'
 import type { NowPlaying, RoomState, Role } from '../types'
@@ -14,6 +14,33 @@ export default function Display() {
   const { code } = useParams<{ code: string }>()
   const videoRef = useRef<HTMLVideoElement>(null)
   const nowPlayingRef = useRef<NowPlaying | null>(null)
+  const [controlsVisible, setControlsVisible] = useState(true)
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const showControls = useCallback(() => {
+    setControlsVisible(true)
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current)
+    hideTimerRef.current = setTimeout(() => setControlsVisible(false), 2500)
+  }, [])
+
+  useEffect(() => {
+    showControls()
+    const onFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', onFullscreenChange)
+    return () => {
+      document.removeEventListener('fullscreenchange', onFullscreenChange)
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current)
+    }
+  }, [showControls])
+
+  function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {})
+    } else {
+      document.exitFullscreen().catch(() => {})
+    }
+  }
 
   useEffect(() => {
     const sock = io()
@@ -29,7 +56,7 @@ export default function Display() {
       abortController = new AbortController()
       const { signal } = abortController
 
-      video.src = `/video/${np.videoId}.webm`
+      video.src = `/video/${np.videoId}.mp4`
       video.load()
 
       video.addEventListener('canplay', () => {
@@ -85,7 +112,11 @@ export default function Display() {
   }, [code])
 
   return (
-    <div className="w-screen h-screen bg-black flex items-center justify-center">
+    <div
+      className="w-screen h-screen bg-black flex items-center justify-center"
+      onMouseMove={showControls}
+      onClick={showControls}
+    >
       <video
         ref={videoRef}
         className="w-full h-full object-contain"
@@ -93,6 +124,15 @@ export default function Display() {
         muted
         x-webkit-airplay="allow"
       />
+      <button
+        onClick={toggleFullscreen}
+        className={`absolute bottom-4 right-4 px-3 py-1.5 rounded-lg bg-black/60 hover:bg-black/80 text-white text-xs font-medium transition-opacity duration-500 ${
+          controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        }`}
+        aria-label="Toggle fullscreen"
+      >
+        {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+      </button>
     </div>
   )
 }

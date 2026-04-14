@@ -1,36 +1,37 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, lazy, Suspense } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useRoomContext } from '../context/RoomContext'
-import { useAudioEngine } from '../hooks/useAudioEngine'
 import { socket } from '../socket'
+import type { QueueItem } from '../types'
 import RoomHeader from '../components/RoomHeader'
-import Player from '../components/Player'
 import Queue from '../components/Queue'
 import AddSong from '../components/AddSong'
-import type { QueueItem } from '../types'
+
+const HostPanel = lazy(() => import('../components/HostPanel'))
 
 export default function Room() {
   const { code } = useParams<{ code: string }>()
   const navigate = useNavigate()
-  const { room, leaveRoom } = useRoomContext()
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const audio = useAudioEngine(videoRef)
+  const { room, joinRoom, leaveRoom } = useRoomContext()
 
-  // If socket connects but we have no room state (e.g. page refresh), kick back to home
   useEffect(() => {
-    if (!socket.connected) {
-      navigate('/')
+    if (room || !code) return
+    // Socket already connected = we just navigated here from create/join, room:joined is in flight
+    if (socket.connected) return
+    const name = localStorage.getItem('karaokey:name')
+    if (name) {
+      const upperCode = code.toUpperCase()
+      const hostToken = localStorage.getItem(`karaokey:host:${upperCode}`) ?? undefined
+      joinRoom(upperCode, name, hostToken)
+    } else {
+      navigate(`/?room=${code}`)
     }
-  }, [navigate])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   function handleLeave() {
     leaveRoom()
     navigate('/')
-  }
-
-  function handlePlay(item: QueueItem) {
-    audio.unlock() // must be called synchronously from click to unblock AudioContext
-    socket.emit('player:play', { queueItemId: item.id })
   }
 
   if (!room) {
@@ -44,33 +45,20 @@ export default function Room() {
   const isHost = room.myRole === 'host'
 
   return (
-    <div className="min-h-full bg-gray-950 text-white flex flex-col">
+    <div className="h-full bg-gray-950 text-white flex flex-col overflow-hidden">
       <RoomHeader room={room} onLeave={handleLeave} />
 
       <div className="flex-1 flex overflow-hidden">
-        {/* Left: player (host only) */}
         {isHost && (
-          <div className="w-96 flex-shrink-0 p-4 overflow-y-auto border-r border-gray-800">
-            {room.nowPlaying ? (
-              <Player
-                audio={audio}
-                videoRef={videoRef}
-                nowPlaying={room.nowPlaying}
-                queue={room.queue}
-                pitchSemitones={room.nowPlaying.pitchSemitones}
-                roomCode={room.code}
-              />
-            ) : (
-              <div className="rounded-xl bg-gray-900 p-6 text-center text-gray-500 text-sm">
-                <p className="text-3xl mb-2">🎤</p>
-                <p>No song playing</p>
-                <p className="text-xs mt-1">Press Play on a queue item to start</p>
-              </div>
-            )}
-          </div>
+          <Suspense fallback={<div className="w-96 flex-shrink-0 border-r border-gray-800" />}>
+            <HostPanel
+              nowPlaying={room.nowPlaying}
+              queue={room.queue}
+              roomCode={room.code}
+            />
+          </Suspense>
         )}
 
-        {/* Right: queue */}
         <div className="flex-1 flex flex-col overflow-hidden">
           <div className="px-4 py-2 border-b border-gray-800 flex items-center justify-between">
             <h2 className="font-semibold text-sm text-gray-300">
@@ -89,7 +77,7 @@ export default function Room() {
             queue={room.queue}
             nowPlaying={room.nowPlaying}
             myRole={room.myRole}
-            onPlay={handlePlay}
+            onPlay={(item: QueueItem) => socket.emit('player:play', { queueItemId: item.id })}
           />
 
           <AddSong />

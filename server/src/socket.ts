@@ -28,7 +28,7 @@ export function registerSocketHandlers(io: Server) {
         const room = roomStore.create(socket.id, name);
         currentRoomCode = room.code;
         socket.join(room.code);
-        socket.emit('room:created', { roomCode: room.code });
+        socket.emit('room:created', { roomCode: room.code, hostToken: room.hostToken });
         // Also send joined event right away so client has full state
         socket.emit('room:joined', {
           room: roomStore.snapshot(room),
@@ -40,7 +40,7 @@ export function registerSocketHandlers(io: Server) {
       }
     });
 
-    socket.on('room:join', ({ roomCode, displayName }: { roomCode: string; displayName: string }) => {
+    socket.on('room:join', ({ roomCode, displayName, hostToken }: { roomCode: string; displayName: string; hostToken?: string }) => {
       const code = (roomCode ?? '').trim().toUpperCase();
       const name = (displayName ?? '').trim().slice(0, 32);
 
@@ -50,15 +50,30 @@ export function registerSocketHandlers(io: Server) {
       }
 
       try {
-        const { room } = roomStore.join(code, socket.id, name);
+        // Idempotent: if this socket is already in the room, just resend their current state
+        const existingRoom = roomStore.get(code);
+        const existingParticipant = existingRoom?.participants.get(socket.id);
+        if (existingParticipant && currentRoomCode === code) {
+          socket.emit('room:joined', {
+            room: roomStore.snapshot(existingRoom!),
+            myRole: existingParticipant.role,
+          });
+          return;
+        }
+
+        const { room, participant, demotedSocketId } = roomStore.join(code, socket.id, name, hostToken);
         currentRoomCode = room.code;
         socket.join(room.code);
 
-        const participant = room.participants.get(socket.id)!;
         socket.emit('room:joined', {
           room: roomStore.snapshot(room),
           myRole: participant.role,
         });
+
+        // If host was reclaimed, notify the demoted socket
+        if (demotedSocketId) {
+          io.to(demotedSocketId).emit('role:changed', { newRole: 'participant' });
+        }
 
         // Notify others of updated participant list
         socket.to(room.code).emit('room:participants', {
@@ -104,7 +119,7 @@ export function registerSocketHandlers(io: Server) {
     }
 
     // Queue: add (all participants)
-    socket.on('queue:add', async ({ url }: { url: string }) => {
+    socket.on('queue:add', async ({ url, title: providedTitle, thumbnailUrl: providedThumbnail }: { url: string; title?: string; thumbnailUrl?: string }) => {
       const room = getRoom();
       if (!room) return;
 
@@ -114,19 +129,22 @@ export function registerSocketHandlers(io: Server) {
         return;
       }
 
-      // Fetch metadata
-      let title = videoId;
-      let thumbnailUrl = '';
-      try {
-        const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
-        const res = await fetch(oembedUrl);
-        if (res.ok) {
-          const data = (await res.json()) as { title: string; thumbnail_url: string };
-          title = data.title;
-          thumbnailUrl = data.thumbnail_url;
+      // Use provided metadata (from search results) or fetch via oEmbed
+      let title = providedTitle?.trim() || videoId;
+      let thumbnailUrl = providedThumbnail ?? '';
+
+      if (!providedTitle) {
+        try {
+          const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
+          const res = await fetch(oembedUrl);
+          if (res.ok) {
+            const data = (await res.json()) as { title: string; thumbnail_url: string };
+            title = data.title;
+            thumbnailUrl = data.thumbnail_url;
+          }
+        } catch {
+          // proceed with defaults
         }
-      } catch {
-        // proceed with defaults
       }
 
       const addedBy = room.participants.get(socket.id)?.displayName ?? 'Unknown';
@@ -143,6 +161,8 @@ export function registerSocketHandlers(io: Server) {
       io.to(room.code).emit('queue:updated', { queue: room.queue });
 
       if (!audioCache.has(videoId)) {
+        // Free space before downloading
+        await audioCache.makeRoom();
         // Extract audio in the background
         extractAudio(videoId)
           .then(async (filePath) => {
@@ -153,6 +173,8 @@ export function registerSocketHandlers(io: Server) {
           })
           .catch((err) => {
             console.error(`[ytdlp] Failed to extract ${videoId}:`, err.message);
+            roomStore.markAudioFailed(videoId);
+            io.to(room.code).emit('queue:updated', { queue: room.queue });
           });
       }
     });
@@ -224,6 +246,23 @@ export function registerSocketHandlers(io: Server) {
         nowPlaying: room.nowPlaying,
         serverTime: Date.now(),
       });
+    });
+
+    // Player: restart current song from beginning (host only)
+    socket.on('player:restart', () => {
+      if (!isHost()) return;
+      const room = getRoom();
+      if (!room || !room.nowPlaying) return;
+
+      try {
+        roomStore.play(room.code, room.nowPlaying.queueItemId);
+        io.to(room.code).emit('player:started', {
+          nowPlaying: room.nowPlaying,
+          queue: room.queue,
+        });
+      } catch {
+        // Item may have been removed from queue already — ignore
+      }
     });
 
     // Player: next (host only)
