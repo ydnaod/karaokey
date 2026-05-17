@@ -40,7 +40,28 @@ fi
 # 2. Homebrew
 step "Checking Homebrew"
 if ! command -v brew >/dev/null 2>&1; then
-  echo "Installing Homebrew (the standard macOS package manager)..."
+  echo "Installing Homebrew (the standard macOS package manager)."
+  echo
+  bold "macOS needs your permission to do this."
+  echo "It will ask for your Mac login password — the same one you use to log in."
+  echo "Type it and press Enter. The password stays hidden as you type; that is normal."
+  echo
+
+  # The Homebrew installer runs non-interactively (so it doesn't stall waiting
+  # for a keypress), which means it cannot prompt for a password itself.
+  # Authorize administrator access up front instead.
+  if ! sudo -v; then
+    red "Could not get administrator access."
+    red "Your macOS account must be an Administrator to install Homebrew."
+    exit 1
+  fi
+
+  # Keep that authorization alive for the rest of this script — the install
+  # can take several minutes and macOS otherwise times the password out.
+  ( while true; do sudo -n true; sleep 50; kill -0 "$$" 2>/dev/null || exit; done ) &
+  SUDO_KEEPALIVE_PID=$!
+  trap '[[ -n "${SUDO_KEEPALIVE_PID:-}" ]] && kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true' EXIT
+
   NONINTERACTIVE=1 /bin/bash -c \
     "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 fi
