@@ -87,6 +87,12 @@ step "Installing project dependencies (this may take a minute)"
 npm install
 green "Project dependencies ready."
 
+# 5. Remove the macOS "downloaded from the internet" quarantine flag from the
+# helper scripts so start.command can be opened with a normal double-click.
+step "Unlocking start.command for double-click use"
+xattr -d com.apple.quarantine setup.command start.command 2>/dev/null || true
+green "Done."
+
 step "All set!"
 echo
 bold "To start karaokey, double-click 'start.command' in this folder."

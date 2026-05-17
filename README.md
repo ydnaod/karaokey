@@ -17,13 +17,21 @@ This works on any modern Mac, both Intel and Apple Silicon (M1/M2/M3/M4).
 
 ### 2. Run the setup (one time only)
 
-1. Open the `karaokey-main` folder.
-2. **Double-click `setup.command`**.
-   - The first time, macOS may say *"setup.command can't be opened because Apple cannot check it for malicious software"*.
-   - If so: close that dialog, **right-click `setup.command` → Open**, then click **Open** in the dialog. You only need to do this once.
-3. A Terminal window will open and start installing things. **This can take 5–15 minutes** on a fresh Mac.
-4. You may be asked for your Mac password — type it and press Enter (you won't see the characters as you type — that's normal).
-5. When you see **"All set!"** at the bottom, you're done. Close the window.
+Recent versions of macOS block scripts downloaded from the internet if you
+double-click them (you'll see *"Apple could not verify…"*). To get around this,
+you run the setup through the Terminal **once** — after that, starting the app
+is a normal double-click.
+
+1. Open the **Terminal** app: press `Cmd` + `Space`, type `Terminal`, press **Enter**.
+2. In the Terminal window, type the word `bash` followed by a single space.
+   **Do not press Enter yet.**
+3. Open the `karaokey-main` folder in Finder. **Drag the `setup.command` file
+   onto the Terminal window** and let go. Its location gets filled in for you.
+4. Now press **Enter**. The setup starts installing things. **This can take
+   5–15 minutes** on a fresh Mac.
+5. You may be asked for your Mac password — type it and press Enter (you won't
+   see the characters as you type — that's normal).
+6. When you see **"All set!"** at the bottom, you're done. Close the window.
 
 What this installs:
 - Apple's developer tools (needed by everything else)
@@ -35,7 +43,7 @@ What this installs:
 ### 3. Start the app
 
 1. In the `karaokey-main` folder, **double-click `start.command`**.
-   - If you get the same security dialog as before, right-click → Open the first time.
+   (The setup step above unlocked this file, so it just works now.)
 2. After a few seconds, your web browser will open to the karaokey app.
 3. **Leave the Terminal window open** while you use the app.
 
@@ -65,7 +73,9 @@ What this installs:
 
 ## Troubleshooting
 
-**"setup.command can't be opened"** → Right-click the file → **Open** → click **Open** in the dialog. macOS only blocks downloaded scripts the first time.
+**"Apple could not verify…" when opening a `.command` file** → This is expected for `setup.command` — don't double-click it. Run it through the Terminal as described in *Run the setup* above (`bash`, then drag the file in, then Enter). `start.command` is unlocked automatically once setup finishes.
+
+**Re-running `setup.command` later** → Same as the first time: run it through the Terminal with the `bash` + drag method.
 
 **Songs fail to load / "Failed to extract"** → YouTube probably changed something. Re-run `setup.command` to upgrade yt-dlp.
 
