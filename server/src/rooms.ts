@@ -225,7 +225,7 @@ class RoomStore {
         queueItemId: nextItem.id,
         videoId: nextItem.videoId,
         startedAt: Date.now(),
-        pitchSemitones: 0,
+        pitchSemitones: room.nowPlaying?.pitchSemitones ?? 0,
         paused: false,
         pausedAt: null,
       };

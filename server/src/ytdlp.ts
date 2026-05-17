@@ -21,6 +21,8 @@ export function audioExists(videoId: string): boolean {
   return existsSync(audioPath(videoId));
 }
 
+const inFlight = new Map<string, Promise<string>>();
+
 export function extractAudio(videoId: string): Promise<string> {
   if (!validateVideoId(videoId)) {
     return Promise.reject(new Error('INVALID_VIDEO_ID'));
@@ -31,7 +33,10 @@ export function extractAudio(videoId: string): Promise<string> {
     return Promise.resolve(outPath);
   }
 
-  return new Promise((resolve, reject) => {
+  const existing = inFlight.get(videoId);
+  if (existing) return existing;
+
+  const promise = new Promise<string>((resolve, reject) => {
     const args = [
       '-f', 'bestvideo[height<=720]+bestaudio/best[height<=720]',
       '--merge-output-format', 'mp4',
@@ -75,6 +80,12 @@ export function extractAudio(videoId: string): Promise<string> {
       reject(new Error(`Failed to spawn yt-dlp: ${err.message}`));
     });
   });
+
+  inFlight.set(videoId, promise);
+  promise.finally(() => {
+    if (inFlight.get(videoId) === promise) inFlight.delete(videoId);
+  });
+  return promise;
 }
 
 export interface SearchResult {

@@ -185,7 +185,7 @@ export default function Player({ audio, videoRef, nowPlaying, queue, pitchSemito
 
       {/* Pitch control */}
       <div className="px-4 pb-4">
-        <PitchControl pitchSemitones={pitchSemitones} />
+        <PitchControl pitchSemitones={pitchSemitones} nowPlaying={nowPlaying} />
       </div>
     </div>
   )

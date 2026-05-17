@@ -1,4 +1,4 @@
-import { useRef, useCallback, useEffect, type RefObject } from 'react';
+import { useRef, useCallback, useEffect, useMemo, type RefObject } from 'react';
 import { SoundTouchNode } from '@soundtouchjs/audio-worklet';
 // @ts-expect-error — Vite ?url import not typed in TS
 import processorUrl from '@soundtouchjs/audio-worklet/processor?url';
@@ -20,7 +20,9 @@ export type { AudioEngine };
 export function useAudioEngine(videoRef: RefObject<HTMLVideoElement>): AudioEngine {
   const ctxRef = useRef<AudioContext | null>(null);
   const stNodeRef = useRef<SoundTouchNode | null>(null);
+  const mediaSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
   const setupDoneRef = useRef(false);
+  const wiredVideoRef = useRef<HTMLVideoElement | null>(null);
   const loadedVideoIds = useRef<Set<string>>(new Set());
   const pitchRef = useRef<number>(0);
 
@@ -43,29 +45,46 @@ export function useAudioEngine(videoRef: RefObject<HTMLVideoElement>): AudioEngi
   // Wire video element → SoundTouchNode → destination.
   // Called lazily when the video element is available (after Player mounts).
   const setup = useCallback(async () => {
-    if (setupDoneRef.current || !videoRef.current) return;
+    const video = videoRef.current;
+    if (!video) return;
+
+    // If the video element changed (Player remounted), reset so we re-wire.
+    // Also reset the mediaSource since it's bound to the old element.
+    if (wiredVideoRef.current && wiredVideoRef.current !== video) {
+      setupDoneRef.current = false;
+      stNodeRef.current = null;
+      mediaSourceRef.current = null;
+    }
+
+    if (setupDoneRef.current) return;
     setupDoneRef.current = true;
 
     try {
       const ctx = ensureContext();
-      if (ctx.state === 'suspended') await ctx.resume();
+      // Don't await resume here — it requires a user gesture and will hang on
+      // a fresh page load. play() already calls resume() before playing.
+      ctx.resume().catch(() => {});
 
       await SoundTouchNode.register(ctx, processorUrl as string);
 
       const stNode = new SoundTouchNode(ctx);
       stNode.pitchSemitones!.value = pitchRef.current;
 
-      // Wire the graph BEFORE storing the node reference, so setPitch()
-      // only ever operates on a fully-connected node.
-      const mediaSource = ctx.createMediaElementSource(videoRef.current);
-      mediaSource.connect(stNode);
+      // Reuse the existing mediaSource if already created — calling
+      // createMediaElementSource twice on the same element throws.
+      if (!mediaSourceRef.current) {
+        mediaSourceRef.current = ctx.createMediaElementSource(video);
+      }
+      mediaSourceRef.current.connect(stNode);
       stNode.connect(ctx.destination);
 
+      wiredVideoRef.current = video;
       stNodeRef.current = stNode;
-      console.log('[AudioEngine] setup complete — audio graph wired, ctx state:', ctxRef.current?.state);
     } catch (err) {
       console.error('[AudioEngine] setup failed:', err);
       setupDoneRef.current = false;
+      // Don't clear mediaSourceRef — if createMediaElementSource already ran,
+      // we must reuse it on the next attempt.
     }
   }, [videoRef, ensureContext]);
 
@@ -134,5 +153,8 @@ export function useAudioEngine(videoRef: RefObject<HTMLVideoElement>): AudioEngi
     return () => { ctxRef.current?.close(); };
   }, []);
 
-  return { unlock, load, play, pause, resume, setPitch, getCurrentTime, isLoaded, prefetch };
+  return useMemo(
+    () => ({ unlock, load, play, pause, resume, setPitch, getCurrentTime, isLoaded, prefetch }),
+    [unlock, load, play, pause, resume, setPitch, getCurrentTime, isLoaded, prefetch]
+  );
 }
