@@ -15,6 +15,12 @@ This works on any modern Mac, both Intel and Apple Silicon (M1/M2/M3/M4).
 3. **Double-click `karaokey-main.zip`** to unzip it. You'll get a folder called `karaokey-main`.
 4. Drag that folder somewhere easy to find — your **Desktop** is fine.
 
+**Watch how:**
+
+<video src="docs/videos/download-zip.mp4" controls width="100%"></video>
+
+> If the video doesn't play here, [click to watch it](docs/videos/download-zip.mp4).
+
 ### 2. Run the setup (one time only)
 
 Recent versions of macOS block scripts downloaded from the internet if you
@@ -33,12 +39,24 @@ is a normal double-click.
    see the characters as you type — that's normal).
 6. When you see **"All set!"** at the bottom, you're done. Close the window.
 
+**Watch how to start the setup:**
+
+<video src="docs/videos/run-script.mp4" controls width="100%"></video>
+
+> If the video doesn't play here, [click to watch it](docs/videos/run-script.mp4).
+
 What this installs:
 - Apple's developer tools (needed by everything else)
 - Homebrew (the standard Mac package manager)
 - Node.js (runs the app)
 - yt-dlp + ffmpeg (download audio from YouTube)
 - The karaokey app's own dependencies
+
+**What it looks like while it runs:**
+
+<video src="docs/videos/script-running.mp4" controls width="100%"></video>
+
+> If the video doesn't play here, [click to watch it](docs/videos/script-running.mp4).
 
 ### 3. Start the app
 
@@ -60,6 +78,12 @@ What this installs:
 3. Anyone in the room can add YouTube songs to the queue.
 4. Only the **host** controls playback (play/pause/skip) and the **key** (pitch).
 5. The host's laptop plays the audio — plug it into your TV or speaker.
+
+**Walkthrough:**
+
+<video src="docs/videos/usage-guide.mp4" controls width="100%"></video>
+
+> If the video doesn't play here, [click to watch it](docs/videos/usage-guide.mp4).
 
 ---
 
