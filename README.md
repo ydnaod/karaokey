@@ -2,6 +2,18 @@
 
 A lightweight in-browser karaoke app. Queue YouTube videos, change the key (pitch) in real time, and play through your laptop into a TV or speaker.
 
+> 📺 **Prefer to follow along with a video?** Watch the [full setup & usage tutorial on YouTube](https://www.youtube.com/watch?v=pTq55FWx9PA).
+
+---
+
+## ⚠️ Before you run anything — is this safe?
+
+**You should only ever run software from people you trust.** How do you know you can trust this project? You don't! Running a setup script from the internet is *not* a normal, automatically-safe thing to do — so here's how to check it for yourself first:
+
+- **Ask an AI chatbot to review it.** Send the `setup.command` file to your preferred AI chatbot (ChatGPT, Claude, Gemini, etc.) and ask it to read the file and tell you whether it's safe to run. You can also hand it the other files in the folder so it can see exactly what the script installs. Ask it to be **extra thorough** and flag anything malicious or any security concern.
+- **Be careful with scripts and commands from strangers on the internet.** This is true for *any* script, not just this one — take a minute to verify before you run. 🙂
+- **More technically savvy?** You don't have to run either script. Clone the repo, install the dependencies yourself, and run the servers locally — see [Not on a Mac?](#not-on-a-mac) and [For developers](#for-developers) below.
+
 ---
 
 ## Quick install on a Mac (for everyone, not just programmers)
@@ -14,12 +26,6 @@ This works on any modern Mac, both Intel and Apple Silicon (M1/M2/M3/M4).
 2. Open your **Downloads** folder.
 3. **Double-click `karaokey-main.zip`** to unzip it. You'll get a folder called `karaokey-main`.
 4. Drag that folder somewhere easy to find — your **Desktop** is fine.
-
-**Watch how:**
-
-<video src="docs/videos/download-zip.mp4" controls width="100%"></video>
-
-> If the video doesn't play here, [click to watch it](docs/videos/download-zip.mp4).
 
 ### 2. Run the setup (one time only)
 
@@ -39,24 +45,12 @@ is a normal double-click.
    see the characters as you type — that's normal).
 6. When you see **"All set!"** at the bottom, you're done. Close the window.
 
-**Watch how to start the setup:**
-
-<video src="docs/videos/run-script.mp4" controls width="100%"></video>
-
-> If the video doesn't play here, [click to watch it](docs/videos/run-script.mp4).
-
 What this installs:
 - Apple's developer tools (needed by everything else)
 - Homebrew (the standard Mac package manager)
 - Node.js (runs the app)
 - yt-dlp + ffmpeg (download audio from YouTube)
 - The karaokey app's own dependencies
-
-**What it looks like while it runs:**
-
-<video src="docs/videos/script-running.mp4" controls width="100%"></video>
-
-> If the video doesn't play here, [click to watch it](docs/videos/script-running.mp4).
 
 ### 3. Start the app
 
@@ -78,12 +72,6 @@ What this installs:
 3. Anyone in the room can add YouTube songs to the queue.
 4. Only the **host** controls playback (play/pause/skip) and the **key** (pitch).
 5. The host's laptop plays the audio — plug it into your TV or speaker.
-
-**Walkthrough:**
-
-<video src="docs/videos/usage-guide.mp4" controls width="100%"></video>
-
-> If the video doesn't play here, [click to watch it](docs/videos/usage-guide.mp4).
 
 ---
 
