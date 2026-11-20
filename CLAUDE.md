@@ -1,98 +1,35 @@
 # karaokey
 
-A lightweight in-browser karaoke app. Users create/join rooms, queue YouTube videos, and the host controls playback and real-time key (pitch) shifting — playing audio through their device to a TV or speaker.
+An npm-workspaces karaoke app: React 18/Vite/TypeScript client (5173), Node/Hono/Socket.io service (3001). Use Node 20+ and system `yt-dlp`/`ffmpeg`.
 
-## System dependencies
+## Development and verification
 
-These must be installed on the machine running the server. They are not npm packages.
+- `npm run dev`: API watcher plus Vite.
+- `npm run build`: client type check/Vite build and API TypeScript build.
+- `npm test`: isolated 20-client integration/restart/downloader tests; uses existing dependencies and fake media/downloader fixtures.
+- `npm run demo`: build, compiled API without a watcher, and Vite frontend. `start.command` selects an installed supported runtime for this launch only.
+- See [DEMO.md](DEMO.md) for recovery behavior, measured checks, limitations and tonight's startup steps.
 
-| Dependency | Purpose | Install |
-|---|---|---|
-| `yt-dlp` | Extracts audio from YouTube URLs | `brew install yt-dlp` |
-| `ffmpeg` | Transcodes audio to opus format (required by yt-dlp) | `brew install ffmpeg` |
+## Ownership and lifecycle
 
-```bash
-# Install both at once (macOS)
-brew install yt-dlp ffmpeg
+`server/src/rooms.ts` owns room state, persists atomic JSON snapshots in `data/rooms.json`, and restores rooms paused. Room codes and host tokens survive service restarts; socket participants do not. Host identity is reclaimed with the saved browser token. No automatic promotion on disconnect: guests must not unexpectedly become the audio source.
 
-# Cross-platform alternative for yt-dlp
-pip3 install yt-dlp
-# ffmpeg: https://ffmpeg.org/download.html
-```
+The room page hosts controls and the single authoritative playback engine. `/display/:code` is muted, watch-only TV playback. Host refresh/disconnect pauses playback. Queue durability is independent of browser lifetime; uninterrupted audio across playback-browser or media-server restart is not promised.
 
-Keep `yt-dlp` updated periodically — YouTube changes their format occasionally and old versions stop working:
+`server/src/socket.ts` validates/catches client requests, enforces host ownership, bounds per-socket event rate and publishes snapshots. Commands update playback revisions. The host sends `playback:report` with actual video position/paused state every 250 ms; only the active host and matching revision are accepted. `playback:state` drives TV correction. Playback checkpoints save every two seconds while dirty.
 
-```bash
-brew upgrade yt-dlp
-# or: pip3 install -U yt-dlp
-```
+## Media
 
-## Architecture overview
+`server/src/ytdlp.ts` spawns yt-dlp safely using arguments and validated video IDs; duplicate downloads are shared. `server/src/jobs.ts` caps downloads/searches at two active and 40 pending jobs. Subprocess groups have a two-minute deadline. Failures are handled without floating rejected promises.
 
-npm workspaces monorepo with two packages:
+Downloaded media stays in `audio-cache/<videoId>.mp4`. **Do not change the merge output to WebM.** YouTube can serve h264, which cannot be stream-copied into WebM. The format selector remains `bestvideo[height<=720]+bestaudio/best[height<=720]` with MP4 merge output.
 
-- `server/` — Node.js + Hono + Socket.io API server (port 3001)
-- `client/` — React 18 + Vite + TypeScript frontend (port 5173 in dev)
+`client/src/hooks/useAudioEngine.ts` routes a native video element through a SoundTouch AudioWorklet. Initialize the graph only when playing, and unlock/resume AudioContext from a user gesture. Always load the currently requested source, including A→B→A repeats. Cancel obsolete playback operations when the command revision changes.
 
-## The key technical challenge
+The TV follows measured host media time, uses local elapsed time between reports, corrects drift and pauses after missing reports. It never advances the queue itself. Handle `nowPlaying: null` explicitly.
 
-YouTube iframes block Web Audio API access via CORS. Pitch shifting is impossible if you route through the YT iframe. The solution:
+No cache eviction during live playback. Admission uses a soft 2 GiB budget, with possible active-download overshoot; cleanup belongs between sessions. Missing media is marked failed on restore and can be retried.
 
-1. **Server extracts video+audio** with `yt-dlp` when a song is queued → saves as `audio-cache/<videoId>.mp4`
-2. **Host client fetches** the raw audio file and decodes it via `AudioContext.decodeAudioData()`
-3. **SoundTouchJS AudioWorklet** (`@soundtouchjs/audio-worklet`) does real-time phase vocoder pitch shifting in the browser — no speed change, just pitch
-4. **Muted YouTube iframe** is shown for visuals alongside the extracted audio, kept in sync via offset timestamps + drift correction
+## Configuration
 
-Pitch is changed by setting `SoundTouchNode.pitchSemitones.value` (an `AudioParam`) — takes effect within milliseconds, no reload.
-
-## Role model
-
-| Action | Host | Participant |
-|---|---|---|
-| Audio playback & pitch control | Yes (their device only) | No |
-| Play / pause / skip | Yes | No |
-| Reorder / remove queue | Yes | No |
-| Add songs to queue | Yes | Yes |
-| See YouTube video | Yes (muted, for visuals) | No |
-
-## Running locally
-
-```bash
-# Prerequisite: yt-dlp must be on your PATH
-pip install yt-dlp   # or: brew install yt-dlp
-
-npm install
-npm run dev          # starts both server (:3001) and client (:5173)
-```
-
-## Key files
-
-| File | Purpose |
-|---|---|
-| `server/src/rooms.ts` | `RoomStore` — single source of truth for all room/queue/playback/pitch state |
-| `server/src/socket.ts` | All Socket.io event handlers + server-side role enforcement |
-| `server/src/ytdlp.ts` | Safe `yt-dlp` spawn (uses `spawn` not `exec`, validates videoId regex) |
-| `server/src/cache.ts` | LRU disk cache for audio files (2 GB cap) |
-| `client/src/hooks/useAudioEngine.ts` | AudioContext + SoundTouchJS worklet setup + pitch control |
-| `client/src/components/Player.tsx` | Glues muted YT iframe + audio engine; drift correction every 5s |
-| `client/src/hooks/useRoom.ts` | All socket listeners → `useReducer` room state |
-
-## Socket events (quick ref)
-
-**Client → Server:** `room:create`, `room:join`, `room:leave`, `queue:add`, `queue:remove` (host), `queue:reorder` (host), `player:play/pause/resume/next` (host), `pitch:set` (host)
-
-**Server → Client:** `room:created`, `room:joined`, `room:error`, `room:participants`, `role:changed`, `queue:updated`, `audio:ready`, `player:started`, `player:paused`, `player:resumed`, `pitch:changed`
-
-## Video cache format
-
-Downloaded files are stored as **MP4** (`audio-cache/<videoId>.mp4`), not WebM.
-
-**Do not change this to WebM/webm merge output.** YouTube serves different video codecs per video — some are VP9 (webm-compatible) but many are h264 (mp4 only). ffmpeg can merge any codec combination into MP4 without transcoding, but cannot stream-copy h264 into a WebM container. Switching to `--merge-output-format webm` will cause random failures for videos that only have h264 formats available.
-
-The yt-dlp format selector is `bestvideo[height<=720]+bestaudio/best[height<=720]` — codec-agnostic, relies on MP4 container to accept whatever YouTube serves.
-
-## Caveats
-
-- `yt-dlp` must be installed on the server — it's a system binary, not an npm package
-- `audio-cache/` is gitignored; created automatically on server start
-- YouTube ToS gray area — intended for personal/private use only
+`PORT` defaults to 3001. `ROOMS_FILE` and `CACHE_DIR` override storage for isolated testing. Never check runtime room data or credentials into Git. The default store is single-process, versioned JSON. Invalid storage fails startup rather than silently discarding rooms. Existing file permissions are not broadly changed.

@@ -3,3 +3,7 @@ dist/
 audio-cache/
 *.js.map
 .env
+
+data/
+
+.venv-ytdlp/

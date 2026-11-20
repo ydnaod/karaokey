@@ -81,7 +81,7 @@ function SortableItem({ item, index, isPlaying, isHost, onPlay, onRemove }: Item
         <span className="text-xs text-yellow-500 flex-shrink-0 animate-pulse">loading…</span>
       )}
       {item.audioFailed && (
-        <span className="text-xs text-red-400 flex-shrink-0">failed</span>
+        <button onClick={() => socket.emit('queue:retry', { queueItemId: item.id })} className="text-xs text-red-400 flex-shrink-0">Retry download</button>
       )}
 
       {isHost && item.audioReady && !isPlaying && (

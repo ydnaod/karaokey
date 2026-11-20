@@ -1,10 +1,10 @@
-import { readdir, stat, unlink } from 'fs/promises';
+import { readdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const CACHE_DIR = path.resolve(__dirname, '../../audio-cache');
+export const CACHE_DIR = process.env.CACHE_DIR || path.resolve(__dirname, '../../audio-cache');
 const MAX_SIZE_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB
 
 interface CacheEntry {
@@ -55,40 +55,11 @@ class AudioCache {
       sizeBytes: s.size,
       lastAccessedAt: Date.now(),
     });
-    await this.evictIfNeeded();
+    // Keep cached media stable during a live session. Clean up between sessions.
   }
 
-  private totalSize(): number {
-    let total = 0;
-    for (const e of this.entries.values()) total += e.sizeBytes;
-    return total;
-  }
-
-  // Evict LRU entries until total size is below targetBytes.
-  private async evictUntilBelow(targetBytes: number): Promise<void> {
-    while (this.totalSize() > targetBytes && this.entries.size > 0) {
-      const oldest = Array.from(this.entries.values()).sort(
-        (a, b) => a.lastAccessedAt - b.lastAccessedAt
-      )[0];
-      try {
-        await unlink(oldest.filePath);
-        console.log(`[cache] Evicted ${oldest.videoId} (freed ${(oldest.sizeBytes / 1e6).toFixed(0)} MB)`);
-      } catch (err) {
-        console.warn(`[cache] Could not delete ${oldest.filePath}:`, err);
-      }
-      // Always remove from entries so we don't loop forever on a bad file
-      this.entries.delete(oldest.videoId);
-    }
-  }
-
-  // Call before starting a download to ensure there is room.
-  async makeRoom(): Promise<void> {
-    // Keep to 75% so there's headroom for incoming downloads
-    await this.evictUntilBelow(MAX_SIZE_BYTES * 0.75);
-  }
-
-  private async evictIfNeeded(): Promise<void> {
-    await this.evictUntilBelow(MAX_SIZE_BYTES);
+  canDownload(): boolean {
+    return [...this.entries.values()].reduce((n,e)=>n+e.sizeBytes,0) < MAX_SIZE_BYTES;
   }
 
   count(): number {

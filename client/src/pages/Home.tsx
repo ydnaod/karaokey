@@ -23,6 +23,7 @@ export default function Home() {
     if (!name) { setError('Enter your name'); return }
     setError('')
     setLoading(true)
+    localStorage.setItem('karaokey:name', name)
 
     try {
       if (!socket.connected) socket.connect()

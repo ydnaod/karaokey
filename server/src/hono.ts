@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { serveStatic } from '@hono/node-server/serve-static';
 import os from 'os';
+import { jobStats } from './jobs.js';
 import { roomStore } from './rooms.js';
 import { audioCache, CACHE_DIR } from './cache.js';
 import { extractVideoId, searchYouTube } from './ytdlp.js';
@@ -25,7 +26,7 @@ export function buildHonoApp() {
 
   // Health
   app.get('/health', (c) =>
-    c.json({ ok: true, rooms: roomStore.count(), cacheEntries: audioCache.count() })
+    c.json({ ok: true, rooms: roomStore.count(), cacheEntries: audioCache.count(), downloader: jobStats(), rssBytes: process.memoryUsage().rss })
   );
 
   // oEmbed proxy
@@ -38,7 +39,7 @@ export function buildHonoApp() {
 
     try {
       const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
-      const res = await fetch(oembedUrl);
+      const res = await fetch(oembedUrl, { signal: AbortSignal.timeout(5000) });
       if (!res.ok) return c.json({ error: 'Failed to fetch oEmbed' }, 502);
       const data = (await res.json()) as { title: string; thumbnail_url: string };
       return c.json({ title: data.title, thumbnailUrl: data.thumbnail_url, videoId });
@@ -49,7 +50,7 @@ export function buildHonoApp() {
 
   // YouTube search proxy
   app.get('/api/search', async (c) => {
-    const q = c.req.query('q')?.trim();
+    const q = c.req.query('q')?.trim().slice(0,200);
     if (!q) return c.json({ error: 'Missing q' }, 400);
     try {
       const results = await searchYouTube(q);

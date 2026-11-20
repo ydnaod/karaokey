@@ -12,7 +12,7 @@ const HostPanel = lazy(() => import('../components/HostPanel'))
 export default function Room() {
   const { code } = useParams<{ code: string }>()
   const navigate = useNavigate()
-  const { room, joinRoom, leaveRoom } = useRoomContext()
+  const { room, joinRoom, leaveRoom, connected, error } = useRoomContext()
 
   useEffect(() => {
     if (room || !code) return
@@ -47,6 +47,8 @@ export default function Room() {
   return (
     <div className="h-full bg-gray-950 text-white flex flex-col overflow-hidden">
       <RoomHeader room={room} onLeave={handleLeave} />
+      {!connected && <p role="status" className="bg-yellow-900 p-2">Reconnecting… Playback paused; your room and queue are saved.</p>}
+      {error && <p role="alert" className="bg-red-900 p-2">{error}</p>}
 
       <div className="flex-1 flex overflow-hidden">
         {isHost && (

@@ -1,11 +1,33 @@
 import { spawn } from 'child_process';
+import { runJob } from './jobs.js';
+import { audioCache } from './cache.js';
 import { existsSync } from 'fs';
 import { readdir, unlink } from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CACHE_DIR = path.resolve(__dirname, '../../audio-cache');
+// Resolve relative to this module, never the caller's working directory or PATH.
+const downloaderPath = process.env.YTDLP_PATH || path.resolve(__dirname, '../../.venv-ytdlp/bin/yt-dlp');
+if (!path.isAbsolute(downloaderPath)) throw new Error('YTDLP_PATH must be an absolute executable path');
+console.log('[downloader] executable:', downloaderPath);
+const CACHE_DIR = process.env.CACHE_DIR || path.resolve(__dirname, '../../audio-cache');
+
+// Kill the whole downloader process group, including ffmpeg, on timeout/shutdown.
+const children = new Set<ReturnType<typeof spawn>>();
+function stopChild(child: ReturnType<typeof spawn>) {
+  if (!child.pid) return;
+  try { if (process.platform === 'win32') child.kill('SIGKILL'); else process.kill(-child.pid, 'SIGKILL'); } catch { /* already exited */ }
+}
+process.once('exit', () => { for (const child of children) stopChild(child); });
+function downloader(args: string[]) {
+  const child = spawn(downloaderPath, args, { stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
+  children.add(child);
+  const timer = setTimeout(() => stopChild(child), 120000);
+  timer.unref();
+  child.once('close', () => { clearTimeout(timer); children.delete(child); });
+  return child;
+}
 
 const VIDEO_ID_RE = /^[a-zA-Z0-9_-]{11}$/;
 
@@ -36,8 +58,11 @@ export function extractAudio(videoId: string): Promise<string> {
   const existing = inFlight.get(videoId);
   if (existing) return existing;
 
-  const promise = new Promise<string>((resolve, reject) => {
+  const promise = runJob(() => new Promise<string>((resolve, reject) => {
+    if (!audioCache.canDownload()) { reject(new Error('Media cache full; clear unused files between sessions')); return; }
     const args = [
+      '--socket-timeout', '20', '--retries', '1', '--no-progress',
+      '--max-filesize', '500M',
       '-f', 'bestvideo[height<=720]+bestaudio/best[height<=720]',
       '--merge-output-format', 'mp4',
       '-o', path.join(CACHE_DIR, '%(id)s.mp4'),
@@ -46,11 +71,12 @@ export function extractAudio(videoId: string): Promise<string> {
       videoId,
     ];
 
-    const proc = spawn('yt-dlp', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = downloader(args);
 
+    proc.stdout!.resume();
     let stderr = '';
-    proc.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
+    proc.stderr!.on('data', (chunk: Buffer) => {
+      stderr = (stderr + chunk.toString()).slice(-4000);
     });
 
     async function cleanupPartials() {
@@ -58,7 +84,7 @@ export function extractAudio(videoId: string): Promise<string> {
         const files = await readdir(CACHE_DIR);
         await Promise.all(
           files
-            .filter((f) => f.startsWith(videoId + '.') && f !== `${videoId}.webm`)
+            .filter((f) => f.startsWith(videoId + '.'))
             .map((f) => unlink(path.join(CACHE_DIR, f)).catch(() => {}))
         );
       } catch {
@@ -79,12 +105,11 @@ export function extractAudio(videoId: string): Promise<string> {
       await cleanupPartials();
       reject(new Error(`Failed to spawn yt-dlp: ${err.message}`));
     });
-  });
+  }));
 
   inFlight.set(videoId, promise);
-  promise.finally(() => {
-    if (inFlight.get(videoId) === promise) inFlight.delete(videoId);
-  });
+  const clear = () => { if (inFlight.get(videoId) === promise) inFlight.delete(videoId); };
+  void promise.then(clear, clear);
   return promise;
 }
 
@@ -97,7 +122,7 @@ export interface SearchResult {
 }
 
 export function searchYouTube(query: string, limit = 10): Promise<SearchResult[]> {
-  return new Promise((resolve, reject) => {
+  return runJob(() => new Promise<SearchResult[]>((resolve, reject) => {
     const args = [
       `ytsearch${limit}:${query}`,
       '--flat-playlist',
@@ -106,10 +131,11 @@ export function searchYouTube(query: string, limit = 10): Promise<SearchResult[]
       '--no-warnings',
     ];
 
-    const proc = spawn('yt-dlp', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = downloader(args);
 
+    proc.stderr!.resume();
     let stdout = '';
-    proc.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+    proc.stdout!.on('data', (chunk: Buffer) => { stdout = (stdout + chunk.toString()).slice(-2_000_000); });
 
     proc.on('close', (code) => {
       if (code !== 0 && stdout.trim() === '') {
@@ -151,7 +177,7 @@ export function searchYouTube(query: string, limit = 10): Promise<SearchResult[]
     proc.on('error', (err) => {
       reject(new Error(`Failed to spawn yt-dlp: ${err.message}`));
     });
-  });
+  }));
 }
 
 export function extractVideoId(url: string): string | null {

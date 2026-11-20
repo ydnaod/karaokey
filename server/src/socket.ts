@@ -1,308 +1,163 @@
 import type { Server } from 'socket.io';
 import { roomStore, generateQueueItemId } from './rooms.js';
 import { audioCache } from './cache.js';
-import { extractAudio, extractVideoId, validateVideoId } from './ytdlp.js';
-
+import { extractAudio, extractVideoId } from './ytdlp.js';
 export function registerSocketHandlers(io: Server) {
-  io.on('connection', (socket) => {
-    let currentRoomCode: string | null = null;
-
-    function getRoom() {
-      if (!currentRoomCode) return null;
-      return roomStore.get(currentRoomCode) ?? null;
+    // Recovery point stays at most two seconds behind the last host report.
+    const saveTimer = setInterval(() => { try {
+        roomStore.save(true);
     }
-
-    function isHost(): boolean {
-      const room = getRoom();
-      return room?.hostSocketId === socket.id;
-    }
-
-    // Create room — called by the host
-    socket.on('room:create', ({ displayName }: { displayName: string }) => {
-      const name = (displayName ?? '').trim().slice(0, 32);
-      if (!name) {
-        socket.emit('room:error', { code: 'INVALID_NAME', message: 'Display name required' });
-        return;
-      }
-      try {
-        const room = roomStore.create(socket.id, name);
-        currentRoomCode = room.code;
-        socket.join(room.code);
-        socket.emit('room:created', { roomCode: room.code, hostToken: room.hostToken });
-        // Also send joined event right away so client has full state
-        socket.emit('room:joined', {
-          room: roomStore.snapshot(room),
-          myRole: 'host',
-        });
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : 'Unknown error';
-        socket.emit('room:error', { code: msg, message: 'Failed to create room' });
-      }
-    });
-
-    socket.on('room:join', ({ roomCode, displayName, hostToken }: { roomCode: string; displayName: string; hostToken?: string }) => {
-      const code = (roomCode ?? '').trim().toUpperCase();
-      const name = (displayName ?? '').trim().slice(0, 32);
-
-      if (!name) {
-        socket.emit('room:error', { code: 'INVALID_NAME', message: 'Display name required' });
-        return;
-      }
-
-      try {
-        // Idempotent: if this socket is already in the room, just resend their current state
-        const existingRoom = roomStore.get(code);
-        const existingParticipant = existingRoom?.participants.get(socket.id);
-        if (existingParticipant && currentRoomCode === code) {
-          socket.emit('room:joined', {
-            room: roomStore.snapshot(existingRoom!),
-            myRole: existingParticipant.role,
-          });
-          return;
+    catch (err) {
+        console.error('[storage]', err);
+    } }, 2000);
+    saveTimer.unref();
+    io.on('connection', socket => {
+        let code: string | null = null;
+        let viewer = false;
+        let budget = 0;
+        let windowStart = Date.now();
+        const room = () => code ? roomStore.get(code) : undefined;
+        const host = () => room()?.hostSocketId === socket.id;
+        const error = (err: unknown) => socket.emit('room:error', { code: 'REQUEST_FAILED', message: err instanceof Error ? err.message : 'Request failed' });
+        const state = () => { const r = room(); if (r)
+            io.to(r.code).emit('room:state', roomStore.snapshot(r)); };
+        const playback = () => { const r = room(); if (r)
+            io.to(r.code).emit('playback:state', { nowPlaying: r.nowPlaying }); };
+        function leave() { if (!code)
+            return; const old = code; const { room: r, wasHost } = roomStore.leave(old, socket.id); socket.leave(old); code = null; viewer = false; if (r) {
+            io.to(old).emit('room:state', roomStore.snapshot(r));
+            if (wasHost)
+                io.to(old).emit('playback:state', { nowPlaying: r.nowPlaying });
+        } }
+        // Catch sync errors and rejected async handlers, including malformed client packets.
+        function on(event: string, handler: (data: any) => unknown) {
+            socket.on(event, (data = {}) => {
+                if (Date.now() - windowStart > 1000) {
+                    windowStart = Date.now();
+                    budget = 0;
+                }
+                if (++budget > 60) {
+                    error(new Error('Too many requests'));
+                    return;
+                }
+                Promise.resolve().then(() => handler(data ?? {})).catch(error);
+            });
         }
-
-        const { room, participant, demotedSocketId } = roomStore.join(code, socket.id, name, hostToken);
-        currentRoomCode = room.code;
-        socket.join(room.code);
-
-        socket.emit('room:joined', {
-          room: roomStore.snapshot(room),
-          myRole: participant.role,
+        on('room:create', ({ displayName }) => { const name = typeof displayName === 'string' ? displayName.trim().slice(0, 32) : ''; if (!name)
+            throw new Error('Display name required'); leave(); const r = roomStore.create(socket.id, name); code = r.code; socket.join(code); socket.emit('room:created', { roomCode: code, hostToken: r.hostToken }); socket.emit('room:joined', { room: roomStore.snapshot(r), myRole: 'host' }); });
+        on('room:join', ({ roomCode, displayName, hostToken }) => {
+            if (typeof roomCode !== 'string' || typeof displayName !== 'string' || !displayName.trim())
+                throw new Error('Invalid room or name');
+            const next = roomCode.trim().toUpperCase();
+            if (code && code !== next)
+                leave();
+            const { room: r, participant, demotedSocketId } = roomStore.join(next, socket.id, displayName.trim().slice(0, 32), hostToken);
+            code = r.code;
+            viewer = false;
+            socket.join(code);
+            if (demotedSocketId)
+                io.to(demotedSocketId).emit('role:changed', { newRole: 'participant' });
+            socket.emit('room:joined', { room: roomStore.snapshot(r), myRole: participant.role });
+            state();
         });
-
-        // If host was reclaimed, notify the demoted socket
-        if (demotedSocketId) {
-          io.to(demotedSocketId).emit('role:changed', { newRole: 'participant' });
+        on('room:watch', ({ roomCode }) => { if (typeof roomCode !== 'string')
+            throw new Error('Invalid room'); const r = roomStore.require(roomCode); if (code && code !== r.code)
+            leave(); code = r.code; viewer = true; socket.join(code); socket.emit('room:joined', { room: roomStore.snapshot(r), myRole: 'viewer' }); socket.emit('playback:state', { nowPlaying: r.nowPlaying }); });
+        on('room:leave', leave);
+        socket.on('disconnect', () => { try {
+            leave();
         }
-
-        // Notify others of updated participant list
-        socket.to(room.code).emit('room:participants', {
-          participants: Array.from(room.participants.values()).map((p) => ({
-            displayName: p.displayName,
-            role: p.role,
-          })),
+        catch (err) {
+            console.error(err);
+        } });
+        on('queue:add', async ({ url, title, thumbnailUrl }) => {
+            const r = room();
+            if (!r || viewer || !r.participants.has(socket.id))
+                return;
+            if (typeof url !== 'string')
+                throw new Error('Invalid URL');
+            const id = extractVideoId(url);
+            if (!id)
+                throw new Error('Invalid YouTube URL');
+            const item = { id: generateQueueItemId(), videoId: id, title: typeof title === 'string' ? title.slice(0, 300) : id, thumbnailUrl: typeof thumbnailUrl === 'string' ? thumbnailUrl.slice(0, 1000) : '', addedBy: r.participants.get(socket.id)!.displayName, audioReady: audioCache.has(id) };
+            roomStore.addToQueue(r.code, item);
+            state();
+            if (!title) {
+                void fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`, { signal: AbortSignal.timeout(5000) })
+                    .then(async (response) => {
+                    if (!response.ok)
+                        return;
+                    const metadata = await response.json() as {
+                        title?: string;
+                        thumbnail_url?: string;
+                    };
+                    if (!r.queue.includes(item))
+                        return;
+                    if (typeof metadata.title === 'string')
+                        item.title = metadata.title.slice(0, 300);
+                    if (typeof metadata.thumbnail_url === 'string')
+                        item.thumbnailUrl = metadata.thumbnail_url.slice(0, 1000);
+                    roomStore.save();
+                    io.to(r.code).emit('room:state', roomStore.snapshot(r));
+                }).catch(() => { });
+            }
+            if (item.audioReady)
+                return;
+            try {
+                if (!audioCache.canDownload())
+                    throw new Error("Media cache full; clear unused files between sessions");
+                const file = await extractAudio(id);
+                await audioCache.register(id, file);
+                roomStore.markAudioReady(id);
+            }
+            catch (err) {
+                roomStore.markAudioFailed(id);
+                console.error('[download]', id, err instanceof Error ? err.message : err);
+            }
+            // Same video can be queued in several rooms; publish all updated snapshots.
+            io.emit('queue:refresh');
+            io.to(r.code).emit('room:state', roomStore.snapshot(r));
         });
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : 'Unknown error';
-        socket.emit('room:error', { code: msg, message: 'Failed to join room' });
-      }
-    });
-
-    socket.on('room:leave', () => {
-      handleLeave();
-    });
-
-    socket.on('disconnect', () => {
-      handleLeave();
-    });
-
-    function handleLeave() {
-      if (!currentRoomCode) return;
-      const code = currentRoomCode;
-      currentRoomCode = null;
-
-      const { room, promotedSocketId } = roomStore.leave(code, socket.id);
-      socket.leave(code);
-
-      if (!room || room.participants.size === 0) return;
-
-      if (promotedSocketId) {
-        io.to(promotedSocketId).emit('role:changed', { newRole: 'host' });
-      }
-
-      io.to(code).emit('room:participants', {
-        participants: Array.from(room.participants.values()).map((p) => ({
-          displayName: p.displayName,
-          role: p.role,
-        })),
-      });
-    }
-
-    // Queue: add (all participants)
-    socket.on('queue:add', async ({ url, title: providedTitle, thumbnailUrl: providedThumbnail }: { url: string; title?: string; thumbnailUrl?: string }) => {
-      const room = getRoom();
-      if (!room) return;
-
-      const videoId = extractVideoId(url ?? '');
-      if (!videoId) {
-        socket.emit('room:error', { code: 'INVALID_URL', message: 'Invalid YouTube URL' });
-        return;
-      }
-
-      // Use provided metadata (from search results) or fetch via oEmbed
-      let title = providedTitle?.trim() || videoId;
-      let thumbnailUrl = providedThumbnail ?? '';
-
-      if (!providedTitle) {
-        try {
-          const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
-          const res = await fetch(oembedUrl);
-          if (res.ok) {
-            const data = (await res.json()) as { title: string; thumbnail_url: string };
-            title = data.title;
-            thumbnailUrl = data.thumbnail_url;
-          }
-        } catch {
-          // proceed with defaults
-        }
-      }
-
-      const addedBy = room.participants.get(socket.id)?.displayName ?? 'Unknown';
-      const item = {
-        id: generateQueueItemId(),
-        videoId,
-        title,
-        thumbnailUrl,
-        addedBy,
-        audioReady: audioCache.has(videoId),
-      };
-
-      roomStore.addToQueue(room.code, item);
-      io.to(room.code).emit('queue:updated', { queue: room.queue });
-
-      if (!audioCache.has(videoId)) {
-        // Free space before downloading
-        await audioCache.makeRoom();
-        // Extract audio in the background
-        extractAudio(videoId)
-          .then(async (filePath) => {
-            await audioCache.register(videoId, filePath);
-            roomStore.markAudioReady(videoId);
-            io.to(room.code).emit('audio:ready', { videoId });
-            io.to(room.code).emit('queue:updated', { queue: room.queue });
-          })
-          .catch((err) => {
-            console.error(`[ytdlp] Failed to extract ${videoId}:`, err.message);
-            roomStore.markAudioFailed(videoId);
-            io.to(room.code).emit('queue:updated', { queue: room.queue });
-          });
-      }
-    });
-
-    // Queue: remove (host only)
-    socket.on('queue:remove', ({ queueItemId }: { queueItemId: string }) => {
-      if (!isHost()) return;
-      const room = getRoom();
-      if (!room) return;
-
-      roomStore.removeFromQueue(room.code, queueItemId);
-      io.to(room.code).emit('queue:updated', { queue: room.queue });
-    });
-
-    // Queue: reorder (host only)
-    socket.on('queue:reorder', ({ fromIndex, toIndex }: { fromIndex: number; toIndex: number }) => {
-      if (!isHost()) return;
-      const room = getRoom();
-      if (!room) return;
-
-      try {
-        roomStore.reorder(room.code, fromIndex, toIndex);
-        io.to(room.code).emit('queue:updated', { queue: room.queue });
-      } catch {
-        // invalid indices — ignore
-      }
-    });
-
-    // Player: play (host only)
-    socket.on('player:play', ({ queueItemId }: { queueItemId: string }) => {
-      if (!isHost()) return;
-      const room = getRoom();
-      if (!room) return;
-
-      const item = room.queue.find((q) => q.id === queueItemId);
-      if (!item || !item.audioReady) {
-        socket.emit('room:error', { code: 'AUDIO_NOT_READY', message: 'Audio not ready yet' });
-        return;
-      }
-
-      roomStore.play(room.code, queueItemId);
-      io.to(room.code).emit('player:started', {
-        nowPlaying: room.nowPlaying,
-        queue: room.queue,
-      });
-    });
-
-    // Player: pause (host only)
-    socket.on('player:pause', () => {
-      if (!isHost()) return;
-      const room = getRoom();
-      if (!room || !room.nowPlaying) return;
-
-      roomStore.pause(room.code);
-      const elapsed = room.nowPlaying.pausedAt
-        ? (room.nowPlaying.pausedAt - room.nowPlaying.startedAt) / 1000
-        : 0;
-      io.to(room.code).emit('player:paused', { positionSeconds: elapsed });
-    });
-
-    // Player: resume (host only)
-    socket.on('player:resume', () => {
-      if (!isHost()) return;
-      const room = getRoom();
-      if (!room || !room.nowPlaying) return;
-
-      roomStore.resume(room.code);
-      io.to(room.code).emit('player:resumed', {
-        nowPlaying: room.nowPlaying,
-        serverTime: Date.now(),
-      });
-    });
-
-    // Player: restart current song from beginning (host only)
-    socket.on('player:restart', () => {
-      if (!isHost()) return;
-      const room = getRoom();
-      if (!room || !room.nowPlaying) return;
-
-      try {
-        roomStore.play(room.code, room.nowPlaying.queueItemId);
-        io.to(room.code).emit('player:started', {
-          nowPlaying: room.nowPlaying,
-          queue: room.queue,
+        on('queue:retry', async ({ queueItemId }) => {
+            const r = room();
+            if (!r || viewer || !r.participants.has(socket.id))
+                return;
+            const item = r.queue.find(q => q.id === queueItemId);
+            if (!item || !item.audioFailed)
+                return;
+            item.audioFailed = false;
+            roomStore.save();
+            state();
+            try {
+                const file = await extractAudio(item.videoId);
+                await audioCache.register(item.videoId, file);
+                roomStore.markAudioReady(item.videoId);
+            }
+            catch (err) {
+                roomStore.markAudioFailed(item.videoId);
+                error(err);
+            }
+            io.emit('queue:refresh');
+            io.to(r.code).emit('room:state', roomStore.snapshot(r));
         });
-      } catch {
-        // Item may have been removed from queue already — ignore
-      }
+        on('room:sync', () => { const r = room(); if (r)
+            socket.emit('room:state', roomStore.snapshot(r)); });
+        function control(event: string, fn: (data: any) => void) { on(event, data => { if (!host())
+            return; fn(data); state(); }); }
+        control('queue:remove', ({ queueItemId }) => { const was = room()?.nowPlaying?.queueItemId === queueItemId; roomStore.removeFromQueue(code!, queueItemId); if (was)
+            playback(); });
+        control('queue:reorder', ({ fromIndex, toIndex }) => roomStore.reorder(code!, fromIndex, toIndex));
+        control('player:play', ({ queueItemId }) => roomStore.play(code!, queueItemId));
+        control('player:pause', () => roomStore.pause(code!));
+        control('player:resume', () => roomStore.resume(code!));
+        control('player:restart', () => { const np = room()?.nowPlaying; if (np)
+            roomStore.play(code!, np.queueItemId); });
+        control('player:next', ({ revision }) => { const np = room()?.nowPlaying; if (revision && revision !== np?.revision)
+            return; roomStore.next(code!); if (!room()?.nowPlaying)
+            playback(); });
+        control('pitch:set', ({ semitones }) => roomStore.setPitch(code!, semitones));
+        on('playback:report', ({ revision, positionSeconds, paused }) => { if (!host() || typeof paused !== 'boolean')
+            return; if (roomStore.report(code!, revision, positionSeconds, paused))
+            playback(); });
     });
-
-    // Player: next (host only)
-    socket.on('player:next', () => {
-      if (!isHost()) return;
-      const room = getRoom();
-      if (!room) return;
-
-      roomStore.next(room.code);
-      io.to(room.code).emit('player:started', {
-        nowPlaying: room.nowPlaying,
-        queue: room.queue,
-      });
-    });
-
-    // Display: watch-only connection for TV display (no participant entry)
-    socket.on('room:watch', ({ roomCode }: { roomCode: string }) => {
-      const code = (roomCode ?? '').trim().toUpperCase();
-      const room = roomStore.get(code);
-      if (!room) {
-        socket.emit('room:error', { code: 'NOT_FOUND', message: 'Room not found' });
-        return;
-      }
-      currentRoomCode = code;
-      socket.join(code);
-      socket.emit('room:joined', { room: roomStore.snapshot(room), myRole: 'viewer' });
-    });
-
-    // Pitch: set (host only)
-    socket.on('pitch:set', ({ semitones }: { semitones: number }) => {
-      if (!isHost()) return;
-      const room = getRoom();
-      if (!room || !room.nowPlaying) return;
-
-      try {
-        roomStore.setPitch(room.code, semitones);
-        io.to(room.code).emit('pitch:changed', { semitones: room.nowPlaying.pitchSemitones });
-      } catch {
-        // nothing playing
-      }
-    });
-  });
 }

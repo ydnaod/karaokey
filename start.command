@@ -16,8 +16,26 @@ elif [[ -x /usr/local/bin/brew ]]; then
   eval "$(/usr/local/bin/brew shellenv)"
 fi
 
+# Use an already installed supported Node for this launch only.
+if ! command -v node >/dev/null 2>&1 || ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)' 2>/dev/null; then
+  for candidate in "$HOME"/.nvm/versions/node/*/bin/node; do
+    if [[ -x "$candidate" ]] && "$candidate" -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)' 2>/dev/null; then
+      export PATH="$(dirname "$candidate"):$PATH"
+      break
+    fi
+  done
+fi
+
+export YTDLP_PATH="${YTDLP_PATH:-$PWD/.venv-ytdlp/bin/yt-dlp}"
+if [[ "$YTDLP_PATH" != /* || ! -x "$YTDLP_PATH" ]]; then
+  red "Missing downloader: $YTDLP_PATH"
+  red "Run bash setup-downloader.command (see DEMO.md)."
+  exit 1
+fi
+echo "Downloader: $YTDLP_PATH ($("$YTDLP_PATH" --version))"
+
 missing=()
-for cmd in node npm yt-dlp ffmpeg; do
+for cmd in node npm ffmpeg; do
   command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
 done
 
@@ -54,4 +72,4 @@ echo
   done
 ) &
 
-npm run dev
+npm run demo

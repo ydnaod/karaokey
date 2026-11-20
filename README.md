@@ -121,3 +121,13 @@ Open `http://localhost:5173/` in your browser.
 ## For developers
 
 Architecture, socket events, and technical details are in [CLAUDE.md](CLAUDE.md).
+
+## Demo recovery and tests
+
+`start.command` now runs the compiled API for demos and selects an already-installed Node 20+ runtime when needed. You can also run `npm run demo` directly with Node 20+.
+
+Rooms and queues persist locally across server restarts. Refreshing the host page reclaims its role using browser storage; recovery pauses playback until you click Play. The external display follows the host's actual playback position. Keep the host on `localhost` and guests on the same Wi-Fi.
+
+See [DEMO.md](DEMO.md) for startup, persistence/cache limits, tested scenarios and remaining hardware checks. Run `npm test` for the isolated 20-client regression suite.
+
+Downloader setup: see **Pinned downloader** in [DEMO.md](DEMO.md). Run `bash setup-downloader.command` with a compatible `PYTHON_BIN` before launching; Karaokey uses its pinned local environment, not global yt-dlp.

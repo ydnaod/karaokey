@@ -19,6 +19,8 @@ export interface NowPlaying {
   queueItemId: string;
   videoId: string;
   startedAt: number;
+  positionSeconds: number;
+  revision: string;
   pitchSemitones: number;
   paused: boolean;
   pausedAt: number | null;
